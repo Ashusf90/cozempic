@@ -472,13 +472,245 @@ def fix_orphaned_tool_results() -> str:
     return f"Removed {total_fixed} orphaned tool_result block(s) in {sessions_fixed} session(s). Backups created."
 
 
+def check_claude_json_corruption() -> CheckResult:
+    """Check for corrupted .claude.json from concurrent session race conditions.
+
+    Multiple Claude Code instances writing to .claude.json simultaneously can
+    cause truncated JSON, missing auth keys, or numStartups anomalies. This
+    affects all multi-instance users and has been reported 15+ times.
+
+    Ref: anthropics/claude-code#28847, #28923, #28813, #28806
+    """
+    claude_json = get_claude_json_path()
+
+    if not claude_json.exists():
+        return CheckResult(
+            name="claude-json-corruption",
+            status="ok",
+            message=f"No {claude_json} found (fresh install)",
+        )
+
+    issues = []
+
+    # Check 1: Is the JSON parseable?
+    try:
+        raw = claude_json.read_text(encoding="utf-8")
+    except OSError as e:
+        return CheckResult(
+            name="claude-json-corruption",
+            status="issue",
+            message=f"Cannot read {claude_json}: {e}",
+            fix_description="Restore from backup",
+        )
+
+    if not raw.strip():
+        issues.append("file is empty")
+    else:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            issues.append(f"invalid JSON: {e}")
+            # Check for truncation
+            if raw.rstrip()[-1] not in ("}", "]"):
+                issues.append("appears truncated (doesn't end with } or ])")
+
+    if issues:
+        return CheckResult(
+            name="claude-json-corruption",
+            status="issue",
+            message=f".claude.json is corrupted: {'; '.join(issues)}",
+            fix_description="Restore from most recent valid backup",
+        )
+
+    # Check 2: Missing critical keys (auth wiped by race condition)
+    data = json.loads(raw)
+    if isinstance(data, dict):
+        # numStartups reset to very low number is a sign of corruption cascade
+        num_startups = data.get("numStartups", 0)
+        if isinstance(num_startups, (int, float)) and 0 < num_startups < 5:
+            # Check if there are backup files suggesting recent corruption
+            backups = list(claude_json.parent.glob(".claude.json.bak*"))
+            if backups:
+                issues.append(f"numStartups={num_startups} with {len(backups)} backup(s) — possible corruption cascade")
+
+    # Check 3: Look for rapid backup file creation (corruption detection cascade)
+    backups = sorted(claude_json.parent.glob(".claude.json.bak*"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if len(backups) > 5:
+        import time
+        recent = [b for b in backups if time.time() - b.stat().st_mtime < 86400]
+        if len(recent) > 3:
+            issues.append(f"{len(recent)} backup files created in last 24h — corruption detection cascade")
+
+    if not issues:
+        return CheckResult(
+            name="claude-json-corruption",
+            status="ok",
+            message=f".claude.json is valid ({len(raw)} bytes)",
+        )
+
+    return CheckResult(
+        name="claude-json-corruption",
+        status="issue" if any("corrupted" in i or "invalid" in i or "truncated" in i for i in issues) else "warning",
+        message=f".claude.json issues: {'; '.join(issues)}",
+        fix_description="Restore from most recent valid backup",
+    )
+
+
+def fix_claude_json_corruption() -> str:
+    """Restore .claude.json from the most recent valid backup."""
+    claude_json = get_claude_json_path()
+
+    # Find backups
+    backups = sorted(
+        claude_json.parent.glob(".claude.json.bak*"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+    if not backups:
+        return "No backup files found. Cannot auto-repair."
+
+    # Find the most recent valid backup
+    for backup in backups:
+        try:
+            raw = backup.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            if isinstance(data, dict) and len(raw) > 10:
+                # Valid backup found — restore it
+                # Backup current corrupted file first
+                corrupted_backup = claude_json.with_suffix(".json.corrupted")
+                if claude_json.exists():
+                    shutil.copy2(claude_json, corrupted_backup)
+                shutil.copy2(backup, claude_json)
+                return f"Restored from {backup.name} ({len(raw)} bytes). Corrupted version saved as {corrupted_backup.name}."
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    return "No valid backup found among existing backup files."
+
+
+def check_zombie_teams() -> CheckResult:
+    """Check for stale/zombie team directories in ~/.claude/teams/.
+
+    Team agents that go idle without completing work become zombies — they
+    don't respond to shutdown requests and their team directories accumulate.
+    These waste disk space and can confuse team detection.
+
+    Ref: anthropics/claude-code#29908
+    """
+    teams_dir = get_claude_dir() / "teams"
+    if not teams_dir.is_dir():
+        return CheckResult(
+            name="zombie-teams",
+            status="ok",
+            message="No teams directory found",
+        )
+
+    import time
+    team_dirs = [d for d in teams_dir.iterdir() if d.is_dir()]
+    if not team_dirs:
+        return CheckResult(
+            name="zombie-teams",
+            status="ok",
+            message="No team directories found",
+        )
+
+    stale_teams = []
+    active_teams = []
+
+    for team_dir in team_dirs:
+        config_path = team_dir / "config.json"
+        if not config_path.exists():
+            # No config = orphaned directory
+            stale_teams.append((team_dir.name, "no config.json"))
+            continue
+
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            stale_teams.append((team_dir.name, "corrupted config.json"))
+            continue
+
+        # Check age — teams older than 24h with no recent activity are likely stale
+        mtime = config_path.stat().st_mtime
+        age_hours = (time.time() - mtime) / 3600
+
+        if age_hours > 24:
+            member_count = len(config.get("members", []))
+            stale_teams.append((team_dir.name, f"{member_count} members, {age_hours:.0f}h old"))
+        else:
+            active_teams.append(team_dir.name)
+
+    if not stale_teams:
+        return CheckResult(
+            name="zombie-teams",
+            status="ok",
+            message=f"{len(active_teams)} active team(s), no stale teams found",
+        )
+
+    details = "; ".join(f"{name} ({reason})" for name, reason in stale_teams[:5])
+    total_size = 0
+    for name, _ in stale_teams:
+        team_path = teams_dir / name
+        for f in team_path.rglob("*"):
+            if f.is_file():
+                total_size += f.stat().st_size
+
+    return CheckResult(
+        name="zombie-teams",
+        status="warning" if len(stale_teams) <= 3 else "issue",
+        message=f"{len(stale_teams)} stale team(s) ({total_size / 1024:.0f}KB): {details}",
+        fix_description="Remove stale team directories (>24h old with no activity)",
+    )
+
+
+def fix_zombie_teams() -> str:
+    """Remove stale team directories older than 24 hours."""
+    import time
+
+    teams_dir = get_claude_dir() / "teams"
+    if not teams_dir.is_dir():
+        return "No teams directory found."
+
+    removed = 0
+    freed = 0
+
+    for team_dir in list(teams_dir.iterdir()):
+        if not team_dir.is_dir():
+            continue
+
+        config_path = team_dir / "config.json"
+
+        # Remove if no config or older than 24h
+        should_remove = False
+        if not config_path.exists():
+            should_remove = True
+        else:
+            mtime = config_path.stat().st_mtime
+            if (time.time() - mtime) / 3600 > 24:
+                should_remove = True
+
+        if should_remove:
+            for f in team_dir.rglob("*"):
+                if f.is_file():
+                    freed += f.stat().st_size
+            shutil.rmtree(team_dir)
+            removed += 1
+
+    if removed == 0:
+        return "No stale teams to remove."
+    return f"Removed {removed} stale team(s), freed {freed / 1024:.0f}KB."
+
+
 # ─── Registry ────────────────────────────────────────────────────────────────
 
 # (name, check_fn, fix_fn_or_None)
 ALL_CHECKS: list[tuple[str, callable, callable | None]] = [
     ("trust-dialog-hang", check_trust_dialog_hang, fix_trust_dialog_hang),
+    ("claude-json-corruption", check_claude_json_corruption, fix_claude_json_corruption),
     ("corrupted-tool-use", check_corrupted_tool_use, fix_corrupted_tool_use),
     ("orphaned-tool-results", check_orphaned_tool_results, fix_orphaned_tool_results),
+    ("zombie-teams", check_zombie_teams, fix_zombie_teams),
     ("oversized-sessions", check_oversized_sessions, None),
     ("stale-backups", check_stale_backups, fix_stale_backups),
     ("disk-usage", check_disk_usage, None),

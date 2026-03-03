@@ -249,6 +249,10 @@ def start_guard(
         )
         watcher_thread.start()
 
+    # Claude process watchdog — detect exit even if Stop hook doesn't fire (#29767)
+    claude_pid = find_claude_pid()
+    claude_alive = True
+
     prune_count = 0
     soft_prune_count = 0
     checkpoint_count = 0
@@ -262,6 +266,17 @@ def start_guard(
             if not session_path.exists():
                 print("  WARNING: Session file disappeared. Stopping guard.")
                 break
+
+            # Watchdog: detect Claude exit (workaround for Stop hook not firing)
+            if claude_pid and claude_alive:
+                try:
+                    os.kill(claude_pid, 0)
+                except (ProcessLookupError, PermissionError):
+                    claude_alive = False
+                    print(f"  [{_now()}] Claude process exited (PID {claude_pid}). Final checkpoint...")
+                    checkpoint_team(session_path=session_path, quiet=False)
+                    print(f"  Guard stopping (Claude exited).")
+                    break
 
             current_size = session_path.stat().st_size
 
