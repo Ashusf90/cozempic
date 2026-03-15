@@ -762,19 +762,43 @@ def _prescan_argv(argv: list[str]) -> list[str]:
             continue
         if sub_seen:
             if tok == "--context-window" and i + 1 < len(argv):
-                os.environ["COZEMPIC_CONTEXT_WINDOW"] = argv[i + 1]
+                val = argv[i + 1]
+                try:
+                    if int(val) <= 0:
+                        raise ValueError
+                    os.environ["COZEMPIC_CONTEXT_WINDOW"] = val
+                except ValueError:
+                    print(f"Warning: ignoring invalid --context-window '{val}'", file=sys.stderr)
                 i += 2
                 continue
             if tok.startswith("--context-window="):
-                os.environ["COZEMPIC_CONTEXT_WINDOW"] = tok.split("=", 1)[1]
+                val = tok.split("=", 1)[1]
+                try:
+                    if int(val) <= 0:
+                        raise ValueError
+                    os.environ["COZEMPIC_CONTEXT_WINDOW"] = val
+                except ValueError:
+                    print(f"Warning: ignoring invalid --context-window '{val}'", file=sys.stderr)
                 i += 1
                 continue
             if tok == "--system-overhead-tokens" and i + 1 < len(argv):
-                os.environ["COZEMPIC_SYSTEM_OVERHEAD_TOKENS"] = argv[i + 1]
+                val = argv[i + 1]
+                try:
+                    if int(val) <= 0:
+                        raise ValueError
+                    os.environ["COZEMPIC_SYSTEM_OVERHEAD_TOKENS"] = val
+                except ValueError:
+                    print(f"Warning: ignoring invalid --system-overhead-tokens '{val}'", file=sys.stderr)
                 i += 2
                 continue
             if tok.startswith("--system-overhead-tokens="):
-                os.environ["COZEMPIC_SYSTEM_OVERHEAD_TOKENS"] = tok.split("=", 1)[1]
+                val = tok.split("=", 1)[1]
+                try:
+                    if int(val) <= 0:
+                        raise ValueError
+                    os.environ["COZEMPIC_SYSTEM_OVERHEAD_TOKENS"] = val
+                except ValueError:
+                    print(f"Warning: ignoring invalid --system-overhead-tokens '{val}'", file=sys.stderr)
                 i += 1
                 continue
         cleaned.append(tok)
