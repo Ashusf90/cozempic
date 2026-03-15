@@ -627,6 +627,29 @@ def write_team_checkpoint(state: TeamState, project_dir: Path | None = None) -> 
     return path
 
 
+def read_team_checkpoint(project_dir: Path | None = None) -> str | None:
+    """Read saved team checkpoint from disk.
+
+    Returns the checkpoint content, or None if not found or empty.
+    Used by PostCompact hook to re-inject team state after compaction.
+    The checkpoint is written by PreCompact (before compaction), so reading
+    from disk is safer than re-scanning the compacted JSONL.
+    """
+    from .session import get_claude_dir
+
+    candidates = []
+    if project_dir and project_dir.exists():
+        candidates.append(project_dir / "team-checkpoint.md")
+    candidates.append(get_claude_dir() / "team-checkpoint.md")
+
+    for path in candidates:
+        if path.exists():
+            content = path.read_text(encoding="utf-8").strip()
+            if content:
+                return content
+    return None
+
+
 def inject_team_recovery(messages: list[Message], state: TeamState) -> list[Message]:
     """Inject team state as a synthetic message pair at the end of the session.
 

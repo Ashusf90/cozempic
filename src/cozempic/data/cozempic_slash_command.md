@@ -128,6 +128,9 @@ Guard prevents state loss by:
 5. Injecting team state as a synthetic message pair
 6. Triggering reload so Claude resumes with clean context + team state baked in
 
+After native compaction, the `PostCompact` hook runs `cozempic post-compact` to
+re-inject the team checkpoint (saved by `PreCompact`) into the conversation.
+
 Use `--no-reload` if the user just wants background pruning without restarting:
 ```bash
 cozempic guard --threshold 50 --no-reload
