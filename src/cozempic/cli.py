@@ -646,6 +646,15 @@ def cmd_init(args):
     print()
 
 
+def cmd_completions(args):
+    """Generate shell completion scripts."""
+    from .completion import bash_completion, zsh_completion
+    if args.shell == "bash":
+        print(bash_completion())
+    elif args.shell == "zsh":
+        print(zsh_completion())
+
+
 def cmd_formulary(args):
     print("\n  COZEMPIC FORMULARY")
     print("  ═══════════════════════════════════════════════════════════════════")
@@ -678,7 +687,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="cozempic",
         description="Context weight-loss tool for Claude Code — prune bloated JSONL conversation files",
     )
-    parser.add_argument("--version", action="version", version="%(prog)s 1.0.2")
+    parser.add_argument("--version", action="version", version="%(prog)s 1.1.0")
     parser.add_argument("--context-window", type=int, default=None, help="Override context window size in tokens (e.g. 1000000 for 1M beta)")
     parser.add_argument("--system-overhead-tokens", type=int, default=None, help="Override system overhead estimate (default: 21000). Increase for heavy rules/MCP configs.")
     sub = parser.add_subparsers(dest="command")
@@ -759,12 +768,16 @@ def build_parser() -> argparse.ArgumentParser:
     # formulary
     sub.add_parser("formulary", help="Show all strategies & prescriptions")
 
+    # completions
+    p_comp = sub.add_parser("completions", help="Generate shell completion script")
+    p_comp.add_argument("shell", choices=["bash", "zsh"], help="Shell type")
+
     return parser
 
 
 _SUBCOMMANDS = {
     "list", "current", "diagnose", "treat", "strategy", "reload",
-    "checkpoint", "post-compact", "guard", "init", "doctor", "formulary",
+    "checkpoint", "post-compact", "guard", "init", "doctor", "formulary", "completions",
 }
 
 
@@ -859,6 +872,7 @@ def main():
         "init": cmd_init,
         "doctor": cmd_doctor,
         "formulary": cmd_formulary,
+        "completions": cmd_completions,
     }
 
     commands[args.command](args)
