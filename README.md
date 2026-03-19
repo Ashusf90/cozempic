@@ -70,7 +70,7 @@ cozempic init
 That's it. This auto-wires everything:
 
 1. **Guard daemon auto-start** — `SessionStart` hook spawns `cozempic guard --daemon` when Claude Code opens. Background process, PID file prevents double-starts, logs to `/tmp/cozempic_guard_*.log`
-2. **Checkpoint hooks** — `PostToolUse[Task|TaskCreate|TaskUpdate]`, `PreCompact`, `Stop` capture team state at every critical moment
+2. **Checkpoint hooks** — `PostToolUse[Task|TaskCreate|TaskUpdate]`, `PreCompact`, `PostCompact`, `Stop` capture team state at every critical moment
 3. **`/cozempic` slash command** — installed to `~/.claude/commands/` for in-session diagnosis and treatment
 
 Idempotent — safe to run multiple times. Existing hooks and settings are preserved. No second terminal needed.
@@ -165,6 +165,7 @@ cozempic treat <session> --execute          Apply changes with backup
 cozempic strategy <name> <session>          Run single strategy
 cozempic reload [-rx PRESET]                Treat + auto-resume in new terminal
 cozempic checkpoint [--show]                Save team/agent state to disk (no pruning)
+cozempic post-compact                       Output team state after compaction (PostCompact hook)
 cozempic guard [--threshold MB]             Tiered guard: checkpoint + soft/hard prune
 cozempic guard --soft-threshold 25          Custom soft threshold (default: 60% of hard)
 cozempic guard --threshold-tokens 180000    Override hard threshold in tokens (default: 75% of context window)
@@ -369,6 +370,17 @@ Add to your project's `.claude/settings.json`:
         ]
       }
     ],
+    "PostCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cozempic post-compact 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "",
@@ -391,13 +403,14 @@ This checkpoints team state:
 | `PostToolUse[Task]` | After every subagent spawn | Capture new agent immediately |
 | `PostToolUse[TaskCreate\|TaskUpdate]` | After todo list changes | Track task progress |
 | `PreCompact` | Right before auto-compaction | Last chance to save state |
+| `PostCompact` | Right after auto-compaction | Re-inject team state into conversation |
 | `Stop` | Session end | Final checkpoint |
 
 ### Protection layers summary
 
 | Layer | Trigger | What it does |
 |-------|---------|-------------|
-| **Hooks** | Every Task/TaskCreate/TaskUpdate, PreCompact, Stop | Instant checkpoint to disk |
+| **Hooks** | Every Task/TaskCreate/TaskUpdate, PreCompact, PostCompact, Stop | Instant checkpoint to disk |
 | **Guard (checkpoint)** | Every N seconds | Extract team state + config.json, write checkpoint |
 | **Guard (soft prune)** | At soft threshold (default 60% of hard) | Gentle prune, no reload, no disruption |
 | **Guard (hard prune)** | At hard threshold | Full prune + team-protect + optional reload |
@@ -486,6 +499,7 @@ The plugin registers:
 | `SessionStart` | Start guard daemon in background |
 | `PostToolUse` (Task/TaskCreate/TaskUpdate) | Checkpoint agent team state |
 | `PreCompact` | Emergency checkpoint before compaction |
+| `PostCompact` | Re-inject team state after compaction |
 | `Stop` | Final checkpoint on session end |
 
 The MCP server requires `fastmcp` (installed automatically via `uv`). See [plugin/README.md](plugin/README.md) for details.

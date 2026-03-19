@@ -69,6 +69,17 @@ COZEMPIC_HOOKS = {
             ],
         },
     ],
+    "PostCompact": [
+        {
+            "matcher": "",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": "cozempic post-compact 2>/dev/null || true",
+                }
+            ],
+        },
+    ],
     "Stop": [
         {
             "matcher": "",

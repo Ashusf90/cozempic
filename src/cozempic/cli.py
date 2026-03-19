@@ -478,6 +478,26 @@ def cmd_checkpoint(args):
             print()
 
 
+def cmd_post_compact(args):
+    """Output recovery context after native compaction. Designed for PostCompact hook.
+
+    Reads team-checkpoint.md saved by PreCompact and outputs it to stdout,
+    where Claude Code picks it up as hook feedback. Silent when no checkpoint
+    exists (solo sessions without agent teams).
+    """
+    from .team import read_team_checkpoint
+
+    cwd = args.cwd or os.getcwd()
+
+    # Try to find project dir from current session
+    sess = find_current_session(cwd)
+    project_dir = Path(sess["path"]).parent if sess else Path(cwd)
+
+    content = read_team_checkpoint(project_dir)
+    if content:
+        print(content)
+
+
 def cmd_guard(args):
     """Start the guard daemon to prevent compaction-induced state loss."""
     session_id = args.session or None
@@ -619,6 +639,7 @@ def cmd_init(args):
     print(f"    - Guard daemon auto-starts on every session (SessionStart hook)")
     print(f"    - Team state checkpointed on every agent event (PostToolUse hooks)")
     print(f"    - Emergency checkpoint before compaction (PreCompact hook)")
+    print(f"    - Recovery context after compaction (PostCompact hook)")
     print(f"    - Final checkpoint on session end (Stop hook)")
     print()
     print(f"  Just start Claude Code normally. No second terminal needed.")
@@ -707,6 +728,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_cp.add_argument("--cwd", help="Working directory (default: current)")
     p_cp.add_argument("--show", action="store_true", help="Print the team state after saving")
 
+    # post-compact
+    p_post_compact = sub.add_parser("post-compact", help="Output team state after compaction (for PostCompact hook)")
+    p_post_compact.add_argument("--cwd", help="Working directory (default: current)")
+
     # guard
     p_guard = sub.add_parser("guard", help="Background sentinel — auto-prune before compaction triggers")
     p_guard.add_argument("--cwd", help="Working directory (default: current)")
@@ -739,7 +764,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 _SUBCOMMANDS = {
     "list", "current", "diagnose", "treat", "strategy", "reload",
-    "checkpoint", "guard", "init", "doctor", "formulary",
+    "checkpoint", "post-compact", "guard", "init", "doctor", "formulary",
 }
 
 
@@ -805,6 +830,7 @@ def main():
         "strategy": cmd_strategy,
         "reload": cmd_reload,
         "checkpoint": cmd_checkpoint,
+        "post-compact": cmd_post_compact,
         "guard": cmd_guard,
         "init": cmd_init,
         "doctor": cmd_doctor,

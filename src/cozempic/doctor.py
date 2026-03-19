@@ -763,6 +763,62 @@ def check_agent_model_mismatch() -> CheckResult:
     )
 
 
+def check_cozempic_hooks() -> CheckResult:
+    """Check that all expected cozempic hooks are wired in settings.json.
+
+    Verifies that SessionStart, PostToolUse, PreCompact, PostCompact, and Stop
+    hooks are present. Missing hooks mean protection gaps — e.g., no PostCompact
+    means team state isn't re-injected after native compaction.
+    """
+    claude_dir = get_claude_dir()
+    settings_path = claude_dir / "settings.json"
+
+    if not settings_path.exists():
+        return CheckResult(
+            name="cozempic-hooks",
+            status="warning",
+            message="No ~/.claude/settings.json found — no hooks configured",
+            fix_description="Run: cozempic init",
+        )
+
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        return CheckResult(
+            name="cozempic-hooks",
+            status="warning",
+            message=f"Could not read settings.json: {e}",
+        )
+
+    hooks = settings.get("hooks", {})
+    expected = {"SessionStart", "PreCompact", "PostCompact", "Stop"}
+    missing = []
+
+    for event in expected:
+        entries = hooks.get(event, [])
+        has_cozempic = any(
+            "cozempic" in h.get("command", "")
+            for entry in entries
+            for h in entry.get("hooks", [])
+        )
+        if not has_cozempic:
+            missing.append(event)
+
+    if not missing:
+        return CheckResult(
+            name="cozempic-hooks",
+            status="ok",
+            message="All cozempic hooks are wired (SessionStart, PreCompact, PostCompact, Stop)",
+        )
+
+    return CheckResult(
+        name="cozempic-hooks",
+        status="warning",
+        message=f"Missing cozempic hooks: {', '.join(missing)}. Protection gaps exist.",
+        fix_description="Run: cozempic init",
+    )
+
+
 def check_zombie_teams() -> CheckResult:
     """Check for stale/zombie team directories in ~/.claude/teams/.
 
@@ -882,6 +938,7 @@ def fix_zombie_teams() -> str:
 ALL_CHECKS: list[tuple[str, callable, callable | None]] = [
     ("trust-dialog-hang", check_trust_dialog_hang, fix_trust_dialog_hang),
     ("hooks-trust-flag", check_hooks_trust_flag, fix_hooks_trust_flag),
+    ("cozempic-hooks", check_cozempic_hooks, None),
     ("claude-json-corruption", check_claude_json_corruption, fix_claude_json_corruption),
     ("corrupted-tool-use", check_corrupted_tool_use, fix_corrupted_tool_use),
     ("orphaned-tool-results", check_orphaned_tool_results, fix_orphaned_tool_results),
