@@ -237,6 +237,9 @@ def resolve_session(session_arg: str, project_filter: str | None = None) -> Path
     sys.exit(1)
 
 
+MAX_LINE_BYTES = 10 * 1024 * 1024  # 10MB per-line safety limit
+
+
 def load_messages(path: Path) -> list[Message]:
     """Load JSONL file. Returns list of (line_index, message_dict, byte_size)."""
     messages: list[Message] = []
@@ -244,6 +247,9 @@ def load_messages(path: Path) -> list[Message]:
         for i, line in enumerate(f):
             line = line.strip()
             if not line:
+                continue
+            if len(line) > MAX_LINE_BYTES:
+                print(f"  Warning: skipping oversized line {i} ({len(line)} bytes)", file=sys.stderr)
                 continue
             try:
                 msg = json.loads(line)
