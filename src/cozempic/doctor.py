@@ -156,7 +156,7 @@ def check_stale_backups() -> CheckResult:
             message="No projects directory found",
         )
 
-    bak_files = list(projects_dir.rglob("*.bak"))
+    bak_files = list(projects_dir.rglob("*.jsonl.bak"))
     if not bak_files:
         return CheckResult(
             name="stale-backups",
@@ -181,7 +181,7 @@ def fix_stale_backups() -> str:
     if not projects_dir.exists():
         return "No projects directory found."
 
-    bak_files = list(projects_dir.rglob("*.bak"))
+    bak_files = list(projects_dir.rglob("*.jsonl.bak"))
     if not bak_files:
         return "No backup files to clean."
 
@@ -357,7 +357,15 @@ def fix_corrupted_tool_use() -> str:
                 lines[idx] = json.dumps(obj, ensure_ascii=False) + "\n"
 
         if fixed_in_session > 0:
-            path.write_text("".join(lines), encoding="utf-8")
+            content = "".join(lines)
+            tmp_path = path.with_suffix(".tmp")
+            try:
+                tmp_path.write_text(content, encoding="utf-8")
+                import os as _os
+                _os.replace(tmp_path, path)
+            except Exception:
+                tmp_path.unlink(missing_ok=True)
+                raise
             total_fixed += fixed_in_session
             sessions_fixed += 1
 

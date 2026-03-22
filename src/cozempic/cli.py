@@ -237,7 +237,7 @@ def cmd_diagnose(args):
 
 
 def cmd_treat(args):
-    path = resolve_session(args.session, getattr(args, "project", None))
+    path = resolve_session(args.session, getattr(args, "project", None), strict=getattr(args, "execute", False))
     messages = load_messages(path)
     rx_name = args.rx or "standard"
 
@@ -279,6 +279,9 @@ def cmd_treat(args):
 
     print_prescription_result(pr)
 
+    if pre_te.method == "exact" and post_te.method == "heuristic":
+        print("  Note: exact usage data was stripped — post-treatment token count is estimated.")
+
     if args.execute:
         backup = save_messages(path, new_messages, create_backup=True)
         print(f"  Treatment applied to {path}")
@@ -291,7 +294,7 @@ def cmd_treat(args):
 
 
 def cmd_strategy(args):
-    path = resolve_session(args.session, getattr(args, "project", None))
+    path = resolve_session(args.session, getattr(args, "project", None), strict=getattr(args, "execute", False))
     messages = load_messages(path)
 
     if args.name not in STRATEGIES:
@@ -335,9 +338,10 @@ def cmd_strategy(args):
 def cmd_reload(args):
     """Treat the current session, then spawn a watcher that auto-resumes Claude."""
     cwd = args.cwd or os.getcwd()
-    sess = find_current_session(cwd)
+    sess = find_current_session(cwd, strict=True)
     if not sess:
         print("Could not detect current session.", file=sys.stderr)
+        print("Cannot determine session unambiguously — use an explicit session ID.", file=sys.stderr)
         print("Make sure you're running from a directory with a Claude Code project.", file=sys.stderr)
         sys.exit(1)
 
@@ -687,7 +691,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="cozempic",
         description="Context weight-loss tool for Claude Code — prune bloated JSONL conversation files",
     )
-    parser.add_argument("--version", action="version", version="%(prog)s 1.1.0")
+    parser.add_argument("--version", action="version", version="%(prog)s 1.2.0")
     parser.add_argument("--context-window", type=int, default=None, help="Override context window size in tokens (e.g. 1000000 for 1M beta)")
     parser.add_argument("--system-overhead-tokens", type=int, default=None, help="Override system overhead estimate (default: 21000). Increase for heavy rules/MCP configs.")
     sub = parser.add_subparsers(dest="command")

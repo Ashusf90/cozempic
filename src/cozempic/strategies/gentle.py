@@ -132,6 +132,13 @@ def strategy_metadata_strip(messages: list[Message], config: dict) -> StrategyRe
     total_pruned = 0
     replaced = 0
 
+    # Capture exact token counts before stripping (usage fields will be deleted)
+    exact_tokens_before = 0
+    for _, msg, _ in messages:
+        usage = msg.get("message", {}).get("usage")
+        if isinstance(usage, dict):
+            exact_tokens_before += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+
     for pos, (idx, msg, size) in enumerate(messages):
         new_msg = copy.deepcopy(msg)
         changed = False
@@ -162,6 +169,10 @@ def strategy_metadata_strip(messages: list[Message], config: dict) -> StrategyRe
                 total_pruned += saved
                 replaced += 1
 
+    summary = f"Stripped metadata from {replaced} messages"
+    if exact_tokens_before > 0:
+        summary += f" (exact usage before strip: {exact_tokens_before:,} tokens)"
+
     return StrategyResult(
         strategy_name="metadata-strip",
         actions=actions,
@@ -170,5 +181,5 @@ def strategy_metadata_strip(messages: list[Message], config: dict) -> StrategyRe
         messages_affected=replaced,
         messages_removed=0,
         messages_replaced=replaced,
-        summary=f"Stripped metadata from {replaced} messages",
+        summary=summary,
     )

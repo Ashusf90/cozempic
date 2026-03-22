@@ -120,9 +120,12 @@ def treat_session(prescription: str = "standard", execute: bool = False) -> str:
     from cozempic.executor import run_prescription
     from cozempic.tokens import estimate_session_tokens
 
-    sess = find_current_session()
+    sess = find_current_session(strict=execute)
     if not sess:
-        return "Could not detect current session."
+        msg = "Could not detect current session."
+        if execute:
+            msg += " Cannot determine session unambiguously — provide an explicit session ID."
+        return msg
 
     if prescription not in PRESCRIPTIONS:
         return f"Unknown prescription '{prescription}'. Options: {', '.join(PRESCRIPTIONS)}"

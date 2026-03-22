@@ -138,13 +138,25 @@ def prune_with_team_protect(
         new_messages, results = run_prescription(messages, strategy_names, config)
         return new_messages, results, team_state
 
-    # 2. Separate team and non-team messages
+    # 2. Build pending_task_ids — tool_use IDs for ALL team-related calls.
+    # Covers Task results (agent output) AND TaskOutput, SendMessage, etc.
+    from .team import TEAM_TOOL_NAMES
+    pending_task_ids: set[str] = set()
+    for _, msg_dict, _ in messages:
+        inner = msg_dict.get("message", {})
+        for block in (inner.get("content", []) if isinstance(inner.get("content"), list) else []):
+            if block.get("type") == "tool_use" and block.get("name") in TEAM_TOOL_NAMES:
+                tool_use_id = block.get("id", "")
+                if tool_use_id:
+                    pending_task_ids.add(tool_use_id)
+
+    # 3. Separate team and non-team messages
     team_messages = []
     non_team_messages = []
 
     for msg_tuple in messages:
         line_idx, msg_dict, byte_size = msg_tuple
-        if _is_team_message(msg_dict):
+        if _is_team_message(msg_dict, pending_task_ids):
             team_messages.append(msg_tuple)
         else:
             non_team_messages.append(msg_tuple)
@@ -216,10 +228,11 @@ def start_guard(
     soft_threshold_bytes = int(soft_threshold_mb * 1024 * 1024)
 
     # Find the session — explicit ID or auto-detect
+    # strict=True: guard is destructive, refuse to fall back to "most recently modified"
     if session_id:
         sess = _resolve_session_by_id(session_id)
     else:
-        sess = find_current_session(cwd)
+        sess = find_current_session(cwd, strict=True)
     if not sess:
         print("  ERROR: Could not detect current session.", file=sys.stderr)
         if not session_id:
@@ -528,11 +541,11 @@ def guard_prune_cycle(
         "reloading": False,
     }
 
-    # Trigger reload if configured — kill Claude + resume
+    # Trigger reload if configured — terminate Claude then auto-resume
     if auto_reload:
         claude_pid = find_claude_pid()
         if claude_pid:
-            _spawn_reload_watcher(claude_pid, cwd, session_id=session_id)
+            _terminate_and_resume(claude_pid, cwd, session_id=session_id)
             result["reloading"] = True
         else:
             resume_flag = f"--resume {session_id}" if session_id else "--resume"
@@ -540,6 +553,53 @@ def guard_prune_cycle(
             print(f"  Restart manually: claude {resume_flag}")
 
     return result
+
+
+def _terminate_and_resume(claude_pid: int, project_dir: str, session_id: str | None = None) -> None:
+    """Send SIGTERM to Claude, wait up to 5s for exit, SIGKILL if needed, then spawn resume.
+
+    In SSH sessions the resume watcher can't open a new terminal, so we skip
+    termination entirely — the session was pruned in place and Claude will
+    continue with the reduced context.
+    """
+    if is_ssh_session():
+        resume_flag = f"--resume {session_id}" if session_id else "--resume"
+        print(f"  SSH session — skipping terminate+resume. Resume manually: claude {resume_flag}")
+        return
+
+    system = platform.system()
+
+    # 1. Ask Claude to exit
+    try:
+        if system == "Windows":
+            subprocess.call(["taskkill", "/PID", str(claude_pid)],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            os.kill(claude_pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass  # Already dead
+
+    # 2. Poll for exit up to 5s
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        try:
+            os.kill(claude_pid, 0)
+            time.sleep(0.2)
+        except (ProcessLookupError, PermissionError, OSError):
+            break
+    else:
+        # Still alive — force kill
+        try:
+            if system == "Windows":
+                subprocess.call(["taskkill", "/F", "/PID", str(claude_pid)],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                os.kill(claude_pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+
+    # 3. Spawn the resume watcher (opens new terminal after process fully exits)
+    _spawn_reload_watcher(claude_pid, project_dir, session_id=session_id)
 
 
 def _spawn_reload_watcher(claude_pid: int, project_dir: str, session_id: str | None = None):

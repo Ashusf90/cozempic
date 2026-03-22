@@ -183,14 +183,6 @@ TEAM_TOOL_NAMES = {
     "Task", "TaskOutput", "TaskStop",
 }
 
-# Keyword patterns for detecting team-related content in text/results
-TEAM_KEYWORDS = re.compile(
-    r"team.?name|agent.?id|teammate|team.?lead|"
-    r"SendMessage|TeamCreate|TaskCreate|TaskUpdate|"
-    r"agent.?team|spawn.+teammate|team.+config|"
-    r"subagent_type|run_in_background|resume.*agent",
-    re.IGNORECASE,
-)
 
 # Patterns for parsing task-notification XML in user messages
 _TASK_NOTIFICATION_RE = re.compile(
@@ -209,15 +201,18 @@ _AGENT_PROGRESS_RE = re.compile(
 )
 
 
-def _is_team_message(msg_dict: dict) -> bool:
+def _is_team_message(msg_dict: dict, pending_task_ids: set[str] | None = None) -> bool:
     """Check if a message is related to agent team coordination.
 
     Handles these JSONL message types:
     - type='assistant': Tool use calls (Task, TaskCreate, etc.)
     - type='user': Nested content with task-notification XML
     - type='queue-operation': Root-level content with task-notification XML
-    - Tool results from any team-related tool calls
-    - Text mentioning team coordination keywords
+    - Tool results matching known Task tool_use IDs (via pending_task_ids)
+
+    Detection is schema-first: tool_use block names and task-notification XML.
+    TEAM_KEYWORDS is NOT used here — it is for enrichment (extract_team_state)
+    only, to avoid false positives on messages that merely mention team concepts.
     """
     # Handle queue-operation messages (background task results).
     # These have content at the ROOT level, not under 'message'.
@@ -237,33 +232,20 @@ def _is_team_message(msg_dict: dict) -> bool:
 
             block_type = block.get("type", "")
 
-            # Tool use with team-related name
+            # Tool use with team-related name — definitive signal
             if block_type == "tool_use" and block.get("name") in TEAM_TOOL_NAMES:
                 return True
 
-            # Tool result — check both name reference and content
-            if block_type == "tool_result":
-                result_content = block.get("content", "")
-                if isinstance(result_content, str) and TEAM_KEYWORDS.search(result_content):
-                    return True
-                if isinstance(result_content, list):
-                    for sub in result_content:
-                        if isinstance(sub, dict):
-                            text = sub.get("text", "")
-                            if isinstance(text, str) and TEAM_KEYWORDS.search(text):
-                                return True
-
-            # Text mentioning team coordination
-            if block_type == "text":
-                text = block.get("text", "")
-                if isinstance(text, str) and TEAM_KEYWORDS.search(text):
+            # Tool result — match by tool_use_id if we know the pending Task IDs;
+            # fall back to nothing (don't use TEAM_KEYWORDS — too broad).
+            if block_type == "tool_result" and pending_task_ids:
+                tool_use_id = block.get("tool_use_id", "")
+                if tool_use_id in pending_task_ids:
                     return True
 
     elif isinstance(content, str):
-        # task-notification XML in user messages (agent results)
+        # task-notification XML in user messages (agent results) — definitive signal
         if "<task-notification>" in content:
-            return True
-        if TEAM_KEYWORDS.search(content):
             return True
 
     return False
@@ -310,8 +292,19 @@ def extract_team_state(messages: list[Message]) -> TeamState:
     # Track tool_use_id -> subagent key for Task tool results
     tool_use_id_to_subagent: dict[str, str] = {}
 
+    # Pre-pass: collect all team tool_use IDs so _is_team_message can match
+    # their corresponding tool_result messages (task completions, etc.)
+    pending_task_ids: set[str] = set()
+    for _, msg, _ in messages:
+        inner = msg.get("message", {})
+        for block in (inner.get("content", []) if isinstance(inner.get("content"), list) else []):
+            if block.get("type") == "tool_use" and block.get("name") in TEAM_TOOL_NAMES:
+                uid = block.get("id", "")
+                if uid:
+                    pending_task_ids.add(uid)
+
     for line_idx, msg, byte_size in messages:
-        if not _is_team_message(msg):
+        if not _is_team_message(msg, pending_task_ids):
             continue
 
         state.message_count += 1
@@ -574,8 +567,29 @@ def merge_config_into_state(state: TeamState, configs: list[dict] | None = None)
             break
 
     if matched_config is None:
-        # No match by name — use most recent by createdAt
-        matched_config = max(configs, key=lambda c: c.get("createdAt", 0))
+        # Attempt strong joins: leadSessionId → leadAgentId → member ID intersection
+        known_agent_ids = (
+            {s.agent_id for s in state.subagents}
+            | {t.agent_id for t in state.teammates}
+        )
+        for cfg in configs:
+            if state.lead_session_id and cfg.get("leadSessionId") == state.lead_session_id:
+                matched_config = cfg
+                break
+            if state.lead_agent_id and cfg.get("leadAgentId") == state.lead_agent_id:
+                matched_config = cfg
+                break
+            if known_agent_ids:
+                cfg_member_ids = {m.get("agentId", "") for m in cfg.get("members", [])}
+                if known_agent_ids & cfg_member_ids:
+                    matched_config = cfg
+                    break
+
+    if matched_config is None:
+        # No strong join — skip merge to avoid importing wrong team config
+        if not state.config_source:
+            state.config_source = "jsonl"
+        return state
 
     # Merge authoritative fields
     state.team_name = matched_config.get("name", state.team_name)

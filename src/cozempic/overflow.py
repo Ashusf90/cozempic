@@ -178,7 +178,7 @@ class OverflowRecovery:
             self._recovering = False
 
     def _do_recover(self) -> None:
-        from .guard import checkpoint_team, guard_prune_cycle, _spawn_reload_watcher
+        from .guard import checkpoint_team, guard_prune_cycle, _terminate_and_resume
         from .session import find_claude_pid
 
         now = _now()
@@ -249,10 +249,10 @@ class OverflowRecovery:
                 file=sys.stderr,
             )
 
-        # 6. Kill Claude + auto-resume
+        # 6. Terminate Claude + auto-resume
         claude_pid = find_claude_pid()
         if claude_pid:
-            _spawn_reload_watcher(claude_pid, self.cwd, session_id=self.session_id)
+            _terminate_and_resume(claude_pid, self.cwd, session_id=self.session_id)
             print(
                 f"  [{now}] Kill + resume triggered (PID {claude_pid}). "
                 f"~10s downtime.",

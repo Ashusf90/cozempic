@@ -173,14 +173,21 @@ def _match_session_by_text(sessions: list[dict], match_text: str) -> dict | None
     return None
 
 
-def find_current_session(cwd: str | None = None, match_text: str | None = None) -> dict | None:
+def find_current_session(
+    cwd: str | None = None,
+    match_text: str | None = None,
+    strict: bool = False,
+) -> dict | None:
     """Find the current Claude Code session using multiple strategies.
 
     Detection priority:
     1. Process-based: lsof on parent Claude process to find session UUID
     2. Text matching: search session files for a unique text snippet
     3. CWD slug: match working directory against project directory names
-    4. Fallback: most recently modified session across all projects
+    4. Fallback: most recently modified session (only when strict=False)
+
+    When strict=True, Strategy 4 is disabled — callers that perform
+    destructive writes must not proceed on an ambiguous match.
     """
     sessions = find_sessions()
     if not sessions:
@@ -206,19 +213,29 @@ def find_current_session(cwd: str | None = None, match_text: str | None = None) 
         return max(matching, key=lambda s: s["mtime"])
 
     # Strategy 4: Fallback to most recently modified
+    # Disabled in strict mode — refuse to guess on destructive paths.
+    if strict:
+        return None
     return max(sessions, key=lambda s: s["mtime"])
 
 
-def resolve_session(session_arg: str, project_filter: str | None = None) -> Path:
+def resolve_session(
+    session_arg: str,
+    project_filter: str | None = None,
+    strict: bool = False,
+) -> Path:
     """Resolve a session argument to a JSONL file path.
 
     Accepts: full path, UUID, UUID prefix, or "current" for auto-detection.
+    When strict=True, auto-detection refuses to fall back to "most recent session".
     """
     if session_arg == "current":
-        sess = find_current_session()
+        sess = find_current_session(strict=strict)
         if sess:
             return sess["path"]
         print("Error: Could not auto-detect current session.", file=sys.stderr)
+        if strict:
+            print("Cannot determine session unambiguously — use an explicit session ID.", file=sys.stderr)
         print("Use 'cozempic list' to find the session ID.", file=sys.stderr)
         sys.exit(1)
 
@@ -274,12 +291,20 @@ def save_messages(
         backup_path = path.with_suffix(f".{ts}.jsonl.bak")
         shutil.copy2(path, backup_path)
 
-    with open(path, "w", encoding="utf-8") as f:
-        for _, msg, _ in messages:
-            if msg.get("_parse_error"):
-                f.write(msg["_raw"] + "\n")
-            else:
-                f.write(json.dumps(msg, separators=(",", ":")) + "\n")
+    tmp_path = path.with_suffix(".tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            for _, msg, _ in messages:
+                if msg.get("_parse_error"):
+                    f.write(msg["_raw"] + "\n")
+                else:
+                    f.write(json.dumps(msg, separators=(",", ":")) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
     return backup_path
 

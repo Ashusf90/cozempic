@@ -24,6 +24,22 @@ Cozempic prevents this with five layers of protection:
 
 **Zero external dependencies.** Python 3.10+ stdlib only.
 
+## Changelog
+
+### v1.2.0
+
+- **Atomic file writes** — all session writes use `write → fsync → os.replace()`. No partial writes on crash, interrupt, or full disk.
+- **Strict session resolution** — destructive operations (`--execute`, `reload`, guard auto-detect) now refuse to act when the session match is ambiguous. Previously they'd pick the most recently modified file and silently operate on the wrong session.
+- **Schema-first team detection** — team messages are now classified by `tool_use` block names and `<task-notification>` XML only. Keyword scanning of text content has been removed, eliminating false positives that could accidentally protect non-team messages from pruning.
+- **Strong-join config merge** — `~/.claude/teams/*/config.json` is now merged into state only when there's a matching `leadSessionId`, `leadAgentId`, or member intersection. Loose "most-recent config wins" fallback removed.
+- **Real supervisor on guard reload** — guard now sends SIGTERM, waits up to 5s for clean exit, then SIGKILL before spawning the resume watcher. Previously it only spawned the watcher without terminating Claude first. SSH sessions detect this and print manual instructions instead.
+- **Dual-channel token metrics** — `metadata-strip` records the exact token count from `usage` fields *before* stripping them. If the session had usage data, you see real pre-treatment token counts; `treat` prints a note when the method shifts from exact to heuristic after stripping.
+- **Stale-backups scope fix** — `doctor` now targets `*.jsonl.bak` files only (not all `*.bak` files), preventing accidental deletion of non-Cozempic backup files.
+
+### v1.1.0
+
+PostCompact recovery, tab completion, 1M context scaling, safety limits.
+
 ## Install
 
 ### As a Claude Code Plugin (Recommended)
@@ -134,7 +150,7 @@ Each type of bloat has a dedicated **strategy** that knows exactly what to remov
 |---|----------|-------------|----------|
 | 1 | `progress-collapse` | Collapse consecutive progress tick messages | 40-48% |
 | 2 | `file-history-dedup` | Deduplicate file-history-snapshot messages | 3-6% |
-| 3 | `metadata-strip` | Strip token usage stats, stop_reason, costs | 1-3% |
+| 3 | `metadata-strip` | Strip token usage stats, stop_reason, costs — captures exact token count from `usage` fields before stripping for dual-channel accuracy | 1-3% |
 | 4 | `thinking-blocks` | Remove/truncate thinking content + signatures | 2-5% |
 | 5 | `tool-output-trim` | Trim large tool results (>8KB or >100 lines) | 1-8% |
 | 6 | `stale-reads` | Remove file reads superseded by later edits | 0.5-2% |
@@ -212,6 +228,8 @@ Shared task list:
 
 ### What gets detected
 
+Team message classification is **schema-first**: a message is considered a team coordination message only if it contains a `tool_use` block with a known team tool name (Task, TaskCreate, TaskUpdate, TeamCreate, SendMessage, TaskOutput, TaskStop, TaskGet, TaskList) or a `<task-notification>` XML element. Plain text mentioning team keywords is never mis-classified as team coordination.
+
 Cozempic scans two data sources and merges them:
 
 **JSONL session file** (runtime state):
@@ -256,7 +274,7 @@ When agent team sessions go idle, Claude's InboxPoller can deliver all queued te
 1. **Circuit breaker check** — prevents infinite prune → resume → crash loops (max 3 recoveries in 5 minutes)
 2. **Escalating prescription** — recovery #1 uses `gentle`, #2 uses `standard`, #3 uses `aggressive`
 3. **Pre-flight check** — if post-prune estimate is still too large, skips resume
-4. **Team-protected prune** → kill → auto-resume (~10s downtime vs permanently dead session)
+4. **Team-protected prune** → SIGTERM → 5s grace → SIGKILL → auto-resume (~10s downtime vs permanently dead session). SSH-detected sessions skip the terminate step and print manual recovery instructions instead.
 5. **Breaker trip** — after 3 rapid recoveries, halts with a clear message and saves a final checkpoint
 
 Disable with `--no-reactive` if needed. Zero impact on normal sessions — the watcher runs silently and fast-path exits for small files.
@@ -452,7 +470,7 @@ Current checks:
 | `orphaned-tool-results` | `tool_result` blocks missing their matching `tool_use` — causes 400 errors on compact/resume | Strip orphans |
 | `zombie-teams` | Stale team directories with idle/dead agents ([#29908](https://github.com/anthropics/claude-code/issues/29908)) | Remove stale dirs |
 | `oversized-sessions` | Session files >50MB likely to hang on resume | — |
-| `stale-backups` | Old `.bak` files from previous treatments wasting disk | Delete old backups |
+| `stale-backups` | Old `.jsonl.bak` files from previous treatments wasting disk | Delete old backups |
 | `disk-usage` | Total session storage exceeding healthy thresholds | — |
 
 The `--fix` flag auto-applies all available fixes with backups created before any modification.
@@ -569,7 +587,9 @@ This makes `$CLAUDE_SESSION_ID` available in all Bash commands during the sessio
 ## Safety
 
 - **Always dry-run by default** — `--execute` flag required to modify files
-- **Timestamped backups** — automatic `.bak` files before any modification
+- **Atomic file writes** — all session writes go through `write → fsync → os.replace()`: no partial writes, no corruption on crash or interrupt
+- **Strict session resolution** — `--execute`, `reload`, and guard auto-detect refuse to act when the active session is ambiguous (multiple candidates, no clear match); they error out rather than guess
+- **Timestamped backups** — automatic `.jsonl.bak` files before any modification
 - **Never touches uuid/parentUuid** — conversation DAG stays intact
 - **Never removes summary/queue-operation messages** — structurally important
 - **Team messages are protected** — guard and checkpoint never prune Task, TaskCreate, TaskUpdate, TeamCreate, or SendMessage tool calls
