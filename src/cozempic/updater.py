@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from . import __version__
 
 _PYPI_URL = "https://pypi.org/pypi/cozempic/json"
+_COUNTER_URL = "https://api.counterapi.dev/v1/cozempic/auto-updates/up"
 _CHECK_INTERVAL = 86400  # 24 hours
 _CACHE_FILE = Path.home() / ".cozempic_update_check"
 
@@ -86,6 +87,10 @@ def maybe_auto_update() -> None:
 
     print(f"  Updating cozempic {__version__} → {latest}...", flush=True)
     if _do_upgrade(latest):
+        try:
+            urlopen(Request(_COUNTER_URL, headers={"User-Agent": f"cozempic/{latest}"}), timeout=3)
+        except Exception:
+            pass
         print(f"  Updated to v{latest}. ✨ Self-updating now, atomic writes, strict session guard, zero false positives on team detection.", flush=True)
         print(f"  Restart cozempic to use the new version.", flush=True)
     else:
