@@ -492,3 +492,85 @@ def strategy_tool_use_result_strip(messages: list[Message], config: dict) -> Str
         messages_replaced=replaced,
         summary=f"Stripped toolUseResult from {replaced} messages",
     )
+
+
+@strategy("image-strip", "Strip old image blocks, keep most recent 20%", "aggressive", "1-40%")
+def strategy_image_strip(messages: list[Message], config: dict) -> StrategyResult:
+    """Remove base64 image blocks from older messages, keeping the most recent 20%.
+
+    Screenshots in session history are never re-processed by Claude — they exist as
+    opaque blobs in past turns. Keeping the newest 20% preserves recently-shared context
+    while reclaiming the bulk of image storage. Single image: kept. Two images: keep last
+    one. Ten images: keep last two.
+    """
+    actions: list[PruneAction] = []
+    total_orig = sum(b for _, _, b in messages)
+    total_pruned = 0
+    replaced = 0
+
+    # Collect all (position, block_index) for image blocks across all messages
+    image_locations: list[tuple[int, int]] = []  # (messages index, block index within content)
+    for pos, (idx, msg, size) in enumerate(messages):
+        content = msg.get("message", {}).get("content", [])
+        if not isinstance(content, list):
+            continue
+        for bi, block in enumerate(content):
+            if isinstance(block, dict) and block.get("type") == "image":
+                image_locations.append((pos, bi))
+
+    if not image_locations:
+        return StrategyResult(
+            strategy_name="image-strip",
+            actions=[],
+            original_bytes=total_orig,
+            pruned_bytes=0,
+            messages_affected=0,
+            messages_removed=0,
+            messages_replaced=0,
+            summary="No image blocks found",
+        )
+
+    # Keep the newest 20% (at least 1)
+    total_images = len(image_locations)
+    keep_count = max(1, round(total_images * 0.20))
+    strip_locations = set(image_locations[:-keep_count]) if keep_count < total_images else set()
+
+    # Group strips by message position
+    strip_by_pos: dict[int, set[int]] = {}
+    for pos, bi in strip_locations:
+        strip_by_pos.setdefault(pos, set()).add(bi)
+
+    for pos, block_indices in strip_by_pos.items():
+        idx, msg, size = messages[pos]
+        new_msg = copy.deepcopy(msg)
+        content = new_msg.get("message", {}).get("content", [])
+        new_content = [
+            b for bi, b in enumerate(content)
+            if bi not in block_indices
+        ]
+        new_msg["message"]["content"] = new_content
+        new_size = msg_bytes(new_msg)
+        saved = size - new_size
+        if saved > 0:
+            actions.append(PruneAction(
+                line_index=idx,
+                action="replace",
+                reason=f"stripped {len(block_indices)} old image block(s) (kept newest {keep_count}/{total_images})",
+                original_bytes=size,
+                pruned_bytes=new_size,
+                replacement=new_msg,
+            ))
+            total_pruned += saved
+            replaced += 1
+
+    stripped = total_images - keep_count
+    return StrategyResult(
+        strategy_name="image-strip",
+        actions=actions,
+        original_bytes=total_orig,
+        pruned_bytes=total_pruned,
+        messages_affected=replaced,
+        messages_removed=0,
+        messages_replaced=replaced,
+        summary=f"Stripped {stripped} old image blocks, kept {keep_count} most recent",
+    )

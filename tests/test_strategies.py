@@ -80,16 +80,18 @@ class TestProgressCollapse(unittest.TestCase):
             make_progress(4),
         ]
         sr = STRATEGIES["progress-collapse"].func(messages, {})
-        self.assertEqual(sr.messages_removed, 2)
+        # Run of 3: remove 0,1 keep 2. Isolated 4: also removed. Total=3
+        self.assertEqual(sr.messages_removed, 3)
         self.assertEqual(sr.messages_replaced, 0)
-        # Lines 0 and 1 should be removed, line 2 kept
         removed_lines = {a.line_index for a in sr.actions}
-        self.assertEqual(removed_lines, {0, 1})
+        self.assertEqual(removed_lines, {0, 1, 4})
 
-    def test_single_progress_not_collapsed(self):
+    def test_single_progress_removed(self):
+        """Isolated progress ticks are now removed (not kept)."""
         messages = [make_user(0), make_progress(1), make_user(2)]
         sr = STRATEGIES["progress-collapse"].func(messages, {})
-        self.assertEqual(len(sr.actions), 0)
+        self.assertEqual(len(sr.actions), 1)
+        self.assertEqual(sr.actions[0].line_index, 1)
 
 
 class TestFileHistoryDedup(unittest.TestCase):

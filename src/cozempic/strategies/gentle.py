@@ -9,9 +9,13 @@ from ..registry import strategy
 from ..types import Message, PruneAction, StrategyResult
 
 
-@strategy("progress-collapse", "Collapse consecutive progress tick messages", "gentle", "40-48%")
+@strategy("progress-collapse", "Collapse consecutive and isolated progress tick messages", "gentle", "40-48%")
 def strategy_progress_collapse(messages: list[Message], config: dict) -> StrategyResult:
-    """Consecutive progress messages (hook_progress, bash_progress, etc.) get collapsed into one."""
+    """Remove progress messages (hook_progress, bash_progress, etc.).
+
+    Consecutive runs: all but the last are removed (preserves one summary tick per run).
+    Isolated ticks (run length 1): removed entirely — they carry no conversational value.
+    """
     actions: list[PruneAction] = []
     total_orig = sum(b for _, _, b in messages)
     total_pruned = 0
@@ -27,6 +31,7 @@ def strategy_progress_collapse(messages: list[Message], config: dict) -> Strateg
 
             run_length = run_end - run_start
             if run_length > 1:
+                # Consecutive run: keep last, remove the rest
                 for j in range(run_start, run_end - 1):
                     rm_idx, _, rm_size = messages[j]
                     actions.append(PruneAction(
@@ -37,6 +42,16 @@ def strategy_progress_collapse(messages: list[Message], config: dict) -> Strateg
                         pruned_bytes=0,
                     ))
                     total_pruned += rm_size
+            else:
+                # Isolated tick: remove entirely
+                actions.append(PruneAction(
+                    line_index=idx,
+                    action="remove",
+                    reason="isolated progress tick",
+                    original_bytes=size,
+                    pruned_bytes=0,
+                ))
+                total_pruned += size
             i = run_end
         else:
             i += 1

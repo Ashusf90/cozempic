@@ -33,6 +33,7 @@ PRESCRIPTIONS: dict[str, list[str]] = {
         "stale-reads",
         "system-reminder-dedup",
         "tool-use-result-strip",
+        "image-strip",
         "http-spam",
         "error-retry-collapse",
         "background-poll-collapse",
