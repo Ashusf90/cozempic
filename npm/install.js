@@ -27,10 +27,7 @@ if (!alreadyInstalled) {
     if (r.status === 0) { installed = true; break; }
   }
 
-  if (!installed) {
-    console.log("\ncozempic could not be auto-installed. Run manually:\n  pip install cozempic\n");
-    process.exit(0);
-  }
+  if (!installed) { process.exit(0); }
 
   // Ping install counter on first install
   try {
@@ -47,41 +44,37 @@ const claudeDir = join(os.homedir(), ".claude");
 const globalSettingsPath = join(claudeDir, "settings.json");
 const hookCmd = "command -v cozempic >/dev/null 2>&1 || pip install cozempic --quiet; [ -d .claude ] && cozempic init --quiet 2>/dev/null; cozempic guard --daemon 2>/dev/null || true";
 
-if (existsSync(claudeDir)) {
-  let settings = {};
-  if (existsSync(globalSettingsPath)) {
-    try { settings = JSON.parse(readFileSync(globalSettingsPath, "utf8")); } catch {}
+try {
+  if (existsSync(claudeDir)) {
+    let settings = {};
+    if (existsSync(globalSettingsPath)) {
+      try { settings = JSON.parse(readFileSync(globalSettingsPath, "utf8")); } catch {}
+    }
+    settings.hooks = settings.hooks || {};
+    settings.hooks.SessionStart = settings.hooks.SessionStart || [];
+    const alreadyWired = settings.hooks.SessionStart.some(h =>
+      (h.hooks || []).some(hh => hh.command && hh.command.includes("cozempic"))
+    );
+    if (!alreadyWired) {
+      settings.hooks.SessionStart.push({
+        hooks: [{ type: "command", command: hookCmd }]
+      });
+      writeFileSync(globalSettingsPath, JSON.stringify(settings, null, 2));
+      console.log("Global SessionStart hook wired — cozempic will auto-configure on every Claude Code session.");
+    }
   }
-
-  settings.hooks = settings.hooks || {};
-  settings.hooks.SessionStart = settings.hooks.SessionStart || [];
-
-  const alreadyWired = settings.hooks.SessionStart.some(h =>
-    (h.hooks || []).some(hh => hh.command && hh.command.includes("cozempic"))
-  );
-
-  if (!alreadyWired) {
-    settings.hooks.SessionStart.push({
-      hooks: [{ type: "command", command: hookCmd }]
-    });
-    writeFileSync(globalSettingsPath, JSON.stringify(settings, null, 2));
-    console.log("Global SessionStart hook wired — cozempic will auto-configure on every Claude Code session.");
-  }
-}
+} catch {}
 
 // ── 3. Auto-configure if already inside a Claude Code project ────────────────
 
 const cwd = process.env.INIT_CWD || process.cwd();
 const isClaudeProject = existsSync(join(cwd, ".claude"));
 
-if (isClaudeProject) {
-  console.log("Claude Code project detected — running cozempic init...");
-  const r = spawnSync("cozempic", ["init"], { stdio: "inherit", cwd });
-  if (r.status === 0) {
-    console.log("Guard daemon and hooks wired. Auto-pruning is active.");
-  } else {
-    console.log("cozempic init failed — run manually: cozempic init");
+try {
+  if (isClaudeProject) {
+    const r = spawnSync("cozempic", ["init"], { stdio: "pipe", cwd });
+    if (r.status === 0) {
+      console.log("Guard daemon and hooks wired. Auto-pruning is active.");
+    }
   }
-} else {
-  console.log("cozempic ready. Auto-guard will activate on your next Claude Code session.");
-}
+} catch {}
