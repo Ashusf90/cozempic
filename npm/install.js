@@ -2,8 +2,9 @@
 "use strict";
 
 const { spawnSync } = require("child_process");
-const { existsSync } = require("fs");
+const { existsSync, readFileSync, writeFileSync, mkdirSync } = require("fs");
 const { join } = require("path");
+const os = require("os");
 
 // ── 1. Install Python package ─────────────────────────────────────────────────
 
@@ -32,7 +33,37 @@ if (!alreadyInstalled) {
   }
 }
 
-// ── 2. Auto-configure if inside a Claude Code project ────────────────────────
+// ── 2. Wire global SessionStart hook in ~/.claude/settings.json ──────────────
+// This ensures cozempic auto-configures on every Claude Code session the user
+// opens — even in projects they haven't run `cozempic init` in yet.
+
+const claudeDir = join(os.homedir(), ".claude");
+const globalSettingsPath = join(claudeDir, "settings.json");
+const hookCmd = "command -v cozempic >/dev/null 2>&1 || pip install cozempic --quiet; [ -d .claude ] && cozempic init --quiet 2>/dev/null; cozempic guard --daemon 2>/dev/null || true";
+
+if (existsSync(claudeDir)) {
+  let settings = {};
+  if (existsSync(globalSettingsPath)) {
+    try { settings = JSON.parse(readFileSync(globalSettingsPath, "utf8")); } catch {}
+  }
+
+  settings.hooks = settings.hooks || {};
+  settings.hooks.SessionStart = settings.hooks.SessionStart || [];
+
+  const alreadyWired = settings.hooks.SessionStart.some(h =>
+    (h.hooks || []).some(hh => hh.command && hh.command.includes("cozempic"))
+  );
+
+  if (!alreadyWired) {
+    settings.hooks.SessionStart.push({
+      hooks: [{ type: "command", command: hookCmd }]
+    });
+    writeFileSync(globalSettingsPath, JSON.stringify(settings, null, 2));
+    console.log("Global SessionStart hook wired — cozempic will auto-configure on every Claude Code session.");
+  }
+}
+
+// ── 3. Auto-configure if already inside a Claude Code project ────────────────
 
 const cwd = process.env.INIT_CWD || process.cwd();
 const isClaudeProject = existsSync(join(cwd, ".claude"));
@@ -46,5 +77,5 @@ if (isClaudeProject) {
     console.log("cozempic init failed — run manually: cozempic init");
   }
 } else {
-  console.log("cozempic ready. Run inside your Claude Code project to enable auto-guard:\n  cd your-project/ && cozempic init");
+  console.log("cozempic ready. Auto-guard will activate on your next Claude Code session.");
 }
