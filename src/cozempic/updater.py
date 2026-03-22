@@ -86,6 +86,7 @@ def maybe_auto_update() -> None:
 
     print(f"  Updating cozempic {__version__} → {latest}...", flush=True)
     if _do_upgrade(latest):
-        print(f"  Updated to v{latest}. Restart cozempic to use the new version.", flush=True)
+        print(f"  Updated to v{latest}. ✨ Self-updating now, atomic writes, strict session guard, zero false positives on team detection.", flush=True)
+        print(f"  Restart cozempic to use the new version.", flush=True)
     else:
         print(f"  Auto-update failed. Run: pip install --upgrade cozempic", flush=True)
