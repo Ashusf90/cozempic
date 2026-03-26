@@ -274,24 +274,19 @@ def start_guard(
     else:
         ctx_str = f"{context_window / 1_000:.0f}K"
 
-    print(f"\n  COZEMPIC GUARD v3")
-    print(f"  ═══════════════════════════════════════════════════════════════════")
-    print(f"  Session:     {session_path.name}")
-    print(f"  Size:        {sess['size'] / 1024 / 1024:.1f}MB")
-    print(f"  Context:     {ctx_str}")
-    print(f"  Soft:        {soft_threshold_mb}MB (gentle prune, no reload)")
-    print(f"  Hard:        {threshold_mb}MB (full prune + {'reload' if auto_reload else 'no reload'})")
-    if soft_threshold_tokens is not None:
-        print(f"  Soft tokens: {soft_threshold_tokens:,}")
-    if threshold_tokens is not None:
-        print(f"  Hard tokens: {threshold_tokens:,}")
-    print(f"  Rx:          gentle (soft) / {rx_name} (hard)")
-    print(f"  Interval:    {interval}s")
-    print(f"  Team-protect: enabled")
-    print(f"  Checkpoint:  continuous (every {interval}s)")
-    print(f"  Reactive:    {'enabled' if reactive else 'disabled'}")
-    print(f"\n  Guarding... (Ctrl+C to stop)")
-    print()
+    # Compute threshold % of context window for display
+    if threshold_tokens is not None and context_window:
+        threshold_pct = int(threshold_tokens / context_window * 100)
+    else:
+        threshold_pct = 50  # default
+
+    reload_str = "and reload with an optimized clean context" if auto_reload else "in place (no reload)"
+    print(
+        f"\n  Guard is protecting and optimizing context storage with the {rx_name} prescription. "
+        f"When the session crosses {threshold_pct}% context, it will auto-prune "
+        f"(clean up junk like progress bars while protecting agent team states — "
+        f"TeamCreate, SendMessage, TaskCreate messages) {reload_str}.\n"
+    )
 
     # Reactive overflow recovery via file watcher
     overflow_watcher = None
@@ -371,21 +366,12 @@ def start_guard(
                 quiet=True,
             )
 
-            # Only log if team state changed
+            # Track team state changes silently — only note when prune/threshold fires
             if state and not state.is_empty():
                 team_hash = f"{len(state.subagents)}:{len(state.tasks)}:{state.message_count}"
                 if team_hash != last_team_hash:
                     checkpoint_count += 1
                     last_team_hash = team_hash
-                    agents = len(state.subagents)
-                    tasks = len(state.tasks)
-                    size_mb = current_size / 1024 / 1024
-                    print(
-                        f"  [{_now()}] Checkpoint #{checkpoint_count}: "
-                        f"{agents} agents, {tasks} tasks, "
-                        f"{state.message_count} msgs "
-                        f"({size_mb:.1f}MB)"
-                    )
 
             # ── Token check (fast, from tail of file) ────────────────
             current_tokens = None
@@ -479,13 +465,12 @@ def start_guard(
             overflow_watcher.stop()
 
         # Final checkpoint before exit
-        print(f"\n  [{_now()}] Final checkpoint before exit...")
-        checkpoint_team(session_path=session_path, quiet=False)
+        checkpoint_team(session_path=session_path, quiet=True)
         total_prunes = prune_count + soft_prune_count
-        print(
-            f"  Guard stopped. {checkpoint_count} checkpoints, "
-            f"{soft_prune_count} soft prunes, {prune_count} hard prunes."
-        )
+        if total_prunes:
+            print(f"\n  Guard stopped. Pruned {total_prunes}x during this session.")
+        else:
+            print(f"\n  Guard stopped.")
 
 
 def guard_prune_cycle(
