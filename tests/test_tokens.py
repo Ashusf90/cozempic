@@ -72,7 +72,7 @@ def make_user(line_idx: int, text: str = "hi") -> tuple[int, dict, int]:
         "isSidechain": False,
         "message": {"role": "user", "content": text},
     }
-    return make_message(line_idx, msg)
+    return make_message(line_idx, msg) 
 
 
 def make_progress(line_idx: int) -> tuple[int, dict, int]:
